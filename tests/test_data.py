@@ -30,12 +30,14 @@ _EXPECTED_COLUMNS = {
 
 
 def test_load_claims_row_and_column_count():
+    """Still 60 rows and the columns we expect from the sample file."""
     df = load_claims_frame(_DEFAULT_CSV)
     assert len(df) == 60
     assert set(df.columns) == _EXPECTED_COLUMNS
 
 
 def test_duckdb_register_and_schema():
+    """DuckDB sees the same row count; schema string has a couple familiar names."""
     settings = Settings(data_path=_DEFAULT_CSV)
     con, _ = connect_with_claims(settings)
     try:
@@ -49,6 +51,7 @@ def test_duckdb_register_and_schema():
 
 
 def test_settings_default_data_path_exists():
+    """Default path still finds docs/synthetic_claims.csv when you run from the repo."""
     s = Settings()
     assert s.data_path.name == "synthetic_claims.csv"
     assert s.data_path.is_file()
