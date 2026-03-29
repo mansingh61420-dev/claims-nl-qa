@@ -1,4 +1,3 @@
-"""Guardrail tests—no OpenAI, just SQL checks and a real DuckDB query."""
 
 from pathlib import Path
 
