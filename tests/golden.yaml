@@ -1,0 +1,31 @@
+# Ground-truth checks: canonical SQL against docs/synthetic_claims.csv (60 rows).
+# These do not call the LLM—they prove the data + DuckDB path match known aggregates.
+# Numbers were checked once against pandas from the same file.
+
+version: 1
+
+cases:
+  - id: total_claims
+    sql: SELECT COUNT(*) AS c FROM claims
+    expect:
+      type: scalar
+      value: 60
+
+  - id: denied_count
+    sql: SELECT COUNT(*) AS c FROM claims WHERE claim_status = 'Denied'
+    expect:
+      type: scalar
+      value: 18
+
+  - id: medicare_payer_count
+    sql: SELECT COUNT(*) AS c FROM claims WHERE payer = 'Medicare'
+    expect:
+      type: scalar
+      value: 12
+
+  - id: sum_paid_amount
+    sql: SELECT COALESCE(SUM(paid_amount), 0) AS s FROM claims
+    expect:
+      type: scalar_float
+      value: 161759.19
+      abs_tol: 0.05
