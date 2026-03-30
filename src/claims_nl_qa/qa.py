@@ -94,9 +94,8 @@ def execute_readonly_sql(
     max_rows: int = _DEFAULT_MAX_RESULT_ROWS,
     query_timeout_seconds: float = _DUCKDB_QUERY_TIMEOUT_SECONDS,
 ) -> tuple[list[str], list[tuple[Any, ...]], bool]:
-    """Run inside a subquery + LIMIT so even silly SQL can't return unbounded rows."""
-    validated = validate_sql(sql)
-    wrapped = f"SELECT * FROM ({validated}) AS _subq LIMIT {max_rows + 1}"
+    """Execute a previously validated SQL query inside a subquery + LIMIT wrapper."""
+    wrapped = f"SELECT * FROM ({sql}) AS _subq LIMIT {max_rows + 1}"
     result: dict[str, Any] = {}
     failure: dict[str, Exception] = {}
 
