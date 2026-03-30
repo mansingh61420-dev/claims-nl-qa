@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Don't fetch more than this; keeps the answer prompt small too.
 _DEFAULT_MAX_RESULT_ROWS = 500
+_OPENAI_TIMEOUT_SECONDS = 30
 
 # If any of these show up, we bail—user only gets SELECTs.
 _BANNED_STATEMENT = re.compile(
@@ -41,7 +42,7 @@ class QAResult:
 
 def _client(settings: Settings) -> OpenAI:
     """Small wrapper so we're not sprinkling OpenAI() everywhere."""
-    return OpenAI(api_key=settings.openai_api_key)
+    return OpenAI(api_key=settings.openai_api_key, timeout=_OPENAI_TIMEOUT_SECONDS)
 
 
 def _normalize_sql(sql: str) -> str:

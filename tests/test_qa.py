@@ -1,11 +1,19 @@
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 from claims_nl_qa.config import Settings
 from claims_nl_qa.data import connect_with_claims
-from claims_nl_qa.qa import QAError, _sql_generation_messages, ask_question, execute_readonly_sql, validate_sql
+from claims_nl_qa.qa import (
+    QAError,
+    _client,
+    _sql_generation_messages,
+    ask_question,
+    execute_readonly_sql,
+    validate_sql,
+)
 
 _REPO = Path(__file__).resolve().parents[1]
 _CSV = _REPO / "docs" / "synthetic_claims.csv"
@@ -87,6 +95,18 @@ def test_generate_sql_prompt_wraps_question_and_warns_injection():
     assert "untrusted" in sys
     assert "ignore" in sys
     assert "output nothing but json" in sys
+
+
+def test_openai_client_uses_explicit_timeout():
+    """Ensure our OpenAI client is always created with a hard timeout (30s)."""
+    settings = Settings(data_path=_CSV)
+    with patch("claims_nl_qa.qa.OpenAI") as mock_openai:
+        _client(settings)
+    mock_openai.assert_called_once()
+    kwargs = mock_openai.call_args.kwargs
+    
+    assert kwargs["timeout"] == 30
+    assert isinstance(kwargs["api_key"], str) and len(kwargs["api_key"]) > 0
 
 
 @pytest.mark.skipif(
