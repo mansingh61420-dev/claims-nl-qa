@@ -36,6 +36,7 @@ Then copy `.env.example` → `.env` and set your `OPENAI_API_KEY`.
 | `OPENAI_API_KEY` | Yes (for `/ask`) | Used for SQL + answer generation        |
 | `OPENAI_MODEL`   | No               | Defaults to `gpt-4o-mini`               |
 | `DATA_PATH`      | No               | Defaults to `docs/synthetic_claims.csv` |
+| `RUN_OPENAI_SMOKE` | No             | Set to `1` to enable real-API smoke tests |
 
 One small gotcha: run everything from the repo root, otherwise `.env` might not get picked up.
 
@@ -70,9 +71,12 @@ That’s it.
   * only `SELECT` / `WITH`
   * no multi-statements
   * must reference `claims`
-  * block obvious dangerous keywords
+  * block dangerous SQL keywords (including DuckDB admin/metadata statements)
 
 * Results are capped (row limit) so nothing explodes
+* SQL execution uses a timeout and best-effort interrupt to avoid hanging requests
+* OpenAI client calls use explicit timeouts
+* SQL execution errors returned to clients are sanitized (full details stay in server logs)
 
 * Then a second LLM call takes a **preview of actual query output** and turns it into a readable answer
   → this helps avoid hallucinating based only on schema
@@ -134,6 +138,7 @@ Honestly:
 * great for analytics queries
 * no setup needed
 * works perfectly in-memory for this scale
+* external access is disabled after claims loading, so arbitrary file/network table functions are blocked
 
 ---
 
@@ -163,6 +168,19 @@ Skip anything that hits OpenAI:
 ```bash
 pytest -q -k "not smoke"
 ```
+
+Run only real-API smoke tests (opt-in):
+
+```bash
+# PowerShell
+$env:RUN_OPENAI_SMOKE="1"
+pytest -q -k "smoke"
+```
+
+Notes:
+
+* Smoke tests are intentionally opt-in because they need a working OpenAI API connection.
+* If your network/region is not supported by the API, smoke tests will run but fail with a 403 from OpenAI.
 
 ---
 
@@ -197,8 +215,8 @@ Different problem, but much more stable.
 
 This is still a demo, so a few obvious gaps:
 
-* LLM can still generate incorrect SQL (we only catch obvious bad cases)
-* No real security model (no auth, no rate limiting, etc.)
+* LLM can still generate incorrect SQL (guardrails reduce risk but cannot guarantee perfect SQL)
+* No full production security model (no auth, no rate limiting, etc.)
 * In-memory DB + single connection → not scalable
 * Golden tests don’t evaluate answer quality, only correctness of results
 * Dataset is synthetic → real-world messiness isn’t represented
