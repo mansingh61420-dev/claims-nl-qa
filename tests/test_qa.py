@@ -49,6 +49,26 @@ def test_validate_rejects_write():
         validate_sql("DELETE FROM claims WHERE 1=1")
 
 
+@pytest.mark.parametrize(
+    "stmt",
+    [
+        "INSTALL httpfs",
+        "LOAD httpfs",
+        "SET enable_external_access=true",
+        "RESET enable_external_access",
+        "GRANT SELECT ON claims TO public",
+        "REVOKE SELECT ON claims FROM public",
+        "EXPLAIN SELECT * FROM claims",
+        "SUMMARIZE claims",
+        "SHOW TABLES",
+    ],
+)
+def test_validate_rejects_duckdb_admin_or_meta_statements(stmt: str):
+    """DuckDB admin/metadata statements should be blocked as non-read-only operations."""
+    with pytest.raises(QAError, match="read-only"):
+        validate_sql(stmt)
+
+
 def test_validate_requires_claims_table():
     """If the SQL never mentions `claims`, we reject it."""
     with pytest.raises(QAError, match="claims"):
