@@ -24,7 +24,12 @@ def get_settings_for_request() -> Settings:
 class AskRequest(BaseModel):
     """Body for POST /ask."""
 
-    question: str = Field(..., min_length=1, description="Natural-language question about the claims data.")
+    question: str = Field(
+        ...,
+        min_length=1,
+        max_length=1000,
+        description="Natural-language question about the claims data.",
+    )
 
 
 class AskResponse(BaseModel):

@@ -53,6 +53,15 @@ def test_ask_qa_error_returns_400():
     assert "OPENAI_API_KEY" in r.json()["detail"]
 
 
+def test_ask_rejects_too_long_question():
+    """Input validation should reject unreasonably long questions at the API boundary."""
+    app = create_app()
+    payload = {"question": "a" * 1001}
+    with TestClient(app) as client:
+        r = client.post("/ask", json=payload)
+    assert r.status_code == 422
+
+
 def _openai_configured() -> bool:
     return bool(Settings(data_path=_CSV).openai_api_key.strip())
 
