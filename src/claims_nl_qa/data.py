@@ -48,5 +48,6 @@ def connect_with_claims(settings: Settings) -> tuple[duckdb.DuckDBPyConnection, 
     df = load_claims_frame(settings.data_path)
     con = duckdb.connect(database=":memory:")
     register_claims(con, df)
+    con.execute("SET enable_external_access=false")
     logger.info("Loaded %s rows into DuckDB table %r", len(df), CLAIMS_TABLE)
     return con, df

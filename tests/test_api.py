@@ -58,8 +58,8 @@ def _openai_configured() -> bool:
 
 
 @pytest.mark.skipif(
-    not _openai_configured(),
-    reason="OPENAI_API_KEY empty—set in .env at repo root to run this",
+    not (_openai_configured() and bool(__import__("os").environ.get("RUN_OPENAI_SMOKE"))),
+    reason="Set RUN_OPENAI_SMOKE=1 and OPENAI_API_KEY to run real-API smoke tests",
 )
 def test_ask_happy_path_smoke():
     """Optional: full /ask round-trip against the real API."""

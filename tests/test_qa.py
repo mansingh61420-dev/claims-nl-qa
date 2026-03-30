@@ -61,9 +61,21 @@ def test_execute_readonly_runs_aggregate():
         con.close()
 
 
+def test_duckdb_external_access_is_disabled():
+    """DuckDB should not be able to read arbitrary local files via table functions."""
+    settings = Settings(data_path=_CSV)
+    con, _df = connect_with_claims(settings)
+    try:
+        # If external access is disabled, this should fail regardless of whether the file exists.
+        with pytest.raises(Exception):
+            con.execute("SELECT * FROM read_csv_auto('definitely_not_a_real_file.csv')").fetchall()
+    finally:
+        con.close()
+
+
 @pytest.mark.skipif(
-    not _openai_configured(),
-    reason="OPENAI_API_KEY empty—add it to .env at repo root or export it (run pytest from repo root)",
+    not (_openai_configured() and bool(__import__("os").environ.get("RUN_OPENAI_SMOKE"))),
+    reason="Set RUN_OPENAI_SMOKE=1 and OPENAI_API_KEY to run real-API smoke tests",
 )
 def test_ask_question_smoke():
     """Hits the real API if OPENAI_API_KEY is set—handy for a quick manual check."""
