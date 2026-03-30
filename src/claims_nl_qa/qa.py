@@ -124,7 +124,7 @@ def execute_readonly_sql(
 
     if "exc" in failure:
         exc = failure["exc"]
-        raise QAError(f"Could not run the generated query: {exc}") from exc
+        raise QAError("Could not execute the generated query. Please rephrase your question.") from exc
 
     columns = result.get("columns", [])
     rows = result.get("rows", [])

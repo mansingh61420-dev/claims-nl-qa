@@ -133,6 +133,20 @@ def test_execute_readonly_times_out_and_interrupts():
     assert con.interrupted is True
 
 
+def test_execute_readonly_sql_error_is_sanitized():
+    """Execution failures should return a generic message without leaking DuckDB internals."""
+    settings = Settings(data_path=_CSV)
+    con, _df = connect_with_claims(settings)
+    try:
+        with pytest.raises(QAError) as err:
+            execute_readonly_sql(con, "SELECT definitely_not_a_column FROM claims")
+        msg = str(err.value)
+        assert "Could not execute the generated query" in msg
+        assert "definitely_not_a_column" not in msg
+    finally:
+        con.close()
+
+
 @pytest.mark.skipif(
     not (_openai_configured() and bool(__import__("os").environ.get("RUN_OPENAI_SMOKE"))),
     reason="Set RUN_OPENAI_SMOKE=1 and OPENAI_API_KEY to run real-API smoke tests",
