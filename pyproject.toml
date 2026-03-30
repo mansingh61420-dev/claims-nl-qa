@@ -23,6 +23,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest==8.3.4",
+    "pip-audit",
 ]
 
 [tool.setuptools.packages.find]
