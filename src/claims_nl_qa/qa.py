@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -17,6 +18,7 @@ logger = logging.getLogger(__name__)
 # Don't fetch more than this; keeps the answer prompt small too.
 _DEFAULT_MAX_RESULT_ROWS = 500
 _OPENAI_TIMEOUT_SECONDS = 30
+_DUCKDB_QUERY_TIMEOUT_SECONDS = 30.0
 
 # If any of these show up, we bail—user only gets SELECTs.
 _BANNED_STATEMENT = re.compile(
@@ -89,18 +91,43 @@ def execute_readonly_sql(
     con: duckdb.DuckDBPyConnection,
     sql: str,
     max_rows: int = _DEFAULT_MAX_RESULT_ROWS,
+    query_timeout_seconds: float = _DUCKDB_QUERY_TIMEOUT_SECONDS,
 ) -> tuple[list[str], list[tuple[Any, ...]], bool]:
     """Run inside a subquery + LIMIT so even silly SQL can't return unbounded rows."""
     validated = validate_sql(sql)
     wrapped = f"SELECT * FROM ({validated}) AS _subq LIMIT {max_rows + 1}"
-    try:
-        rel = con.execute(wrapped)
-        description = rel.description or []
-        columns = [d[0] for d in description]
-        rows = rel.fetchall()
-    except Exception as exc:  # DuckDB errors vary; user gets a short line
-        logger.exception("SQL execution failed")
+    result: dict[str, Any] = {}
+    failure: dict[str, Exception] = {}
+
+    def _run_query() -> None:
+        try:
+            rel = con.execute(wrapped)
+            description = rel.description or []
+            result["columns"] = [d[0] for d in description]
+            result["rows"] = rel.fetchall()
+        except Exception as exc:  # DuckDB errors vary
+            logger.exception("SQL execution failed")
+            failure["exc"] = exc
+
+    worker = threading.Thread(target=_run_query, daemon=True)
+    worker.start()
+    worker.join(query_timeout_seconds)
+
+    if worker.is_alive():
+        # Best effort: interrupt the currently running DuckDB query and return a clear timeout error.
+        try:
+            con.interrupt()
+        except Exception:
+            logger.exception("Failed to interrupt timed out DuckDB query")
+        worker.join(1.0)
+        raise QAError("Query timed out. Please try a simpler question.")
+
+    if "exc" in failure:
+        exc = failure["exc"]
         raise QAError(f"Could not run the generated query: {exc}") from exc
+
+    columns = result.get("columns", [])
+    rows = result.get("rows", [])
 
     truncated = len(rows) > max_rows
     if truncated:

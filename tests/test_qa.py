@@ -1,5 +1,6 @@
 
 from pathlib import Path
+import time
 from unittest.mock import patch
 
 import pytest
@@ -107,6 +108,29 @@ def test_openai_client_uses_explicit_timeout():
     
     assert kwargs["timeout"] == 30
     assert isinstance(kwargs["api_key"], str) and len(kwargs["api_key"]) > 0
+
+
+def test_execute_readonly_times_out_and_interrupts():
+    """Long-running SQL should time out and trigger a best-effort DuckDB interrupt."""
+    class SlowConnection:
+        def __init__(self) -> None:
+            self.interrupted = False
+
+        def execute(self, _sql: str):
+            time.sleep(0.05)
+            raise AssertionError("execute should be interrupted before completion in this test")
+
+        def interrupt(self) -> None:
+            self.interrupted = True
+
+    con = SlowConnection()
+    with pytest.raises(QAError, match="timed out"):
+        execute_readonly_sql(
+            con,  # type: ignore[arg-type]
+            "SELECT 1 FROM claims",
+            query_timeout_seconds=0.01,
+        )
+    assert con.interrupted is True
 
 
 @pytest.mark.skipif(
