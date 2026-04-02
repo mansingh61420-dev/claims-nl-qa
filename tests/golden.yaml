@@ -29,3 +29,23 @@ cases:
       type: scalar_float
       value: 161759.19
       abs_tol: 0.05
+
+  # Healthcare-analyst style aggregates (same CSV; verified against pandas/DuckDB).
+  - id: avg_allowed_amount
+    sql: SELECT ROUND(AVG(allowed_amount), 2) AS a FROM claims
+    expect:
+      type: scalar_float
+      value: 3237.67
+      abs_tol: 0.05
+
+  - id: distinct_provider_count
+    sql: SELECT COUNT(DISTINCT provider) AS c FROM claims
+    expect:
+      type: scalar
+      value: 5
+
+  - id: claims_with_denial_reason
+    sql: SELECT COUNT(*) AS c FROM claims WHERE denial_reason IS NOT NULL AND TRIM(COALESCE(denial_reason, '')) <> ''
+    expect:
+      type: scalar
+      value: 11
