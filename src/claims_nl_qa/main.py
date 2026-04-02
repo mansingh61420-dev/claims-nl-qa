@@ -39,6 +39,7 @@ class AskResponse(BaseModel):
     sql: str
     row_count: int
     truncated: bool
+    citations: list[str]
 
 
 @asynccontextmanager
@@ -96,6 +97,7 @@ def create_app() -> FastAPI:
                 sql=out.sql,
                 row_count=out.row_count,
                 truncated=out.truncated,
+                citations=out.citations,
             )
         except QAError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc

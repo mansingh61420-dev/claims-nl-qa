@@ -42,6 +42,7 @@ class QAResult:
     sql: str
     row_count: int
     truncated: bool
+    citations: list[str]
 
 
 def _client(settings: Settings) -> OpenAI:
@@ -216,6 +217,23 @@ def _answer_from_results(
     return text
 
 
+def _citations_from_chunks(top_chunks: Any) -> list[str]:
+    """Create lightweight source citations from retrieved chunk rows."""
+    if top_chunks is None or getattr(top_chunks, "empty", True):
+        return []
+    cols = {"chunk_id", "document_id", "payer", "effective_date"}
+    available = [c for c in cols if c in top_chunks.columns]
+    rows = top_chunks[available].to_dict(orient="records")
+    citations: list[str] = []
+    for row in rows:
+        chunk_id = row.get("chunk_id", "unknown_chunk")
+        document_id = row.get("document_id", "unknown_doc")
+        payer = row.get("payer", "unknown_payer")
+        eff = row.get("effective_date", "unknown_date")
+        citations.append(f"{chunk_id} (doc={document_id}, payer={payer}, effective_date={eff})")
+    return citations
+
+
 def ask_question(
     con: duckdb.DuckDBPyConnection,
     settings: Settings,
@@ -232,6 +250,7 @@ def ask_question(
         raise QAError("Question is empty.")
 
     # Retrieval trace is diagnostic only for now; SQL pipeline remains source of truth.
+    top_chunks = None
     try:
         docs_df = con.execute(f"SELECT * FROM {HEALTHCARE_DOCS_TABLE}").fetchdf()
         chunks_df = chunk_healthcare_documents(docs_df)
@@ -251,10 +270,12 @@ def ask_question(
     columns, rows, truncated = execute_readonly_sql(con, sql, max_rows=max_result_rows)
     preview = _preview_rows(columns, rows)
     answer = _answer_from_results(q, sql, preview, settings)
+    citations = _citations_from_chunks(top_chunks)
 
     return QAResult(
         answer=answer,
         sql=sql,
         row_count=len(rows),
         truncated=truncated,
+        citations=citations,
     )
