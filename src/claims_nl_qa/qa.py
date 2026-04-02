@@ -20,6 +20,22 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MAX_RESULT_ROWS = 500
 _OPENAI_TIMEOUT_SECONDS = 30
 _DUCKDB_QUERY_TIMEOUT_SECONDS = 30.0
+_HIGH_RISK_TERMS = (
+    "treatment",
+    "medication",
+    "prescription",
+    "clinical recommendation",
+    "diagnose",
+    "diagnosis recommendation",
+)
+_ESCALATION_MESSAGE = (
+    "I cannot provide clinical or coverage recommendations from limited context. "
+    "Please escalate this question to a licensed clinician or policy reviewer."
+)
+_INSUFFICIENT_EVIDENCE_MESSAGE = (
+    "I do not have enough grounded evidence in retrieved sources to answer confidently. "
+    "Please refine the question or provide additional policy context."
+)
 
 # If any of these show up, we bail—user only gets SELECTs.
 _BANNED_STATEMENT = re.compile(
@@ -234,6 +250,30 @@ def _citations_from_chunks(top_chunks: Any) -> list[str]:
     return citations
 
 
+def _apply_safety_guardrails(
+    question: str,
+    answer: str,
+    *,
+    citations: list[str],
+    row_count: int,
+) -> str:
+    """Prevent unsupported assertions and force safe fallback when evidence is weak."""
+    q_lower = question.lower()
+    a_lower = answer.lower()
+
+    if any(term in q_lower for term in _HIGH_RISK_TERMS):
+        return _ESCALATION_MESSAGE
+
+    if row_count == 0 or not citations:
+        return _INSUFFICIENT_EVIDENCE_MESSAGE
+
+    risky_answer_patterns = ("you should", "must", "recommend", "definitely")
+    if any(pat in a_lower for pat in risky_answer_patterns):
+        return _ESCALATION_MESSAGE
+
+    return answer
+
+
 def ask_question(
     con: duckdb.DuckDBPyConnection,
     settings: Settings,
@@ -271,9 +311,15 @@ def ask_question(
     preview = _preview_rows(columns, rows)
     answer = _answer_from_results(q, sql, preview, settings)
     citations = _citations_from_chunks(top_chunks)
+    safe_answer = _apply_safety_guardrails(
+        q,
+        answer,
+        citations=citations,
+        row_count=len(rows),
+    )
 
     return QAResult(
-        answer=answer,
+        answer=safe_answer,
         sql=sql,
         row_count=len(rows),
         truncated=truncated,
