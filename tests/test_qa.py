@@ -9,6 +9,7 @@ from claims_nl_qa.config import Settings
 from claims_nl_qa.data import connect_with_claims
 from claims_nl_qa.qa import (
     QAError,
+    _apply_safety_guardrails,
     _client,
     _sql_generation_messages,
     ask_question,
@@ -165,6 +166,40 @@ def test_execute_readonly_sql_error_is_sanitized():
         assert "definitely_not_a_column" not in msg
     finally:
         con.close()
+
+
+def test_safety_guardrails_escalate_high_risk_question():
+    """High-risk clinical questions should return an escalation response."""
+    out = _apply_safety_guardrails(
+        "What treatment should be recommended for this diagnosis?",
+        "You should start medication immediately.",
+        citations=["doc::chunk_0"],
+        row_count=1,
+    )
+    assert "escalate" in out.lower() or "licensed clinician" in out.lower()
+
+
+def test_safety_guardrails_require_grounded_evidence():
+    """Missing citations or empty rows should force insufficient-evidence fallback."""
+    out = _apply_safety_guardrails(
+        "How many denied claims are there?",
+        "There are 10 denied claims.",
+        citations=[],
+        row_count=1,
+    )
+    assert "grounded evidence" in out.lower() or "do not have enough" in out.lower()
+
+
+def test_safety_guardrails_allow_grounded_low_risk_answer():
+    """Low-risk grounded answers should pass through unchanged."""
+    text = "There are 10 denied claims in the selected period."
+    out = _apply_safety_guardrails(
+        "How many denied claims are there?",
+        text,
+        citations=["doc::chunk_0"],
+        row_count=1,
+    )
+    assert out == text
 
 
 @pytest.mark.skipif(

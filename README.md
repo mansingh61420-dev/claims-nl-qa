@@ -1,6 +1,8 @@
 ## claims-nl-qa
 
-This project is a small service that lets you ask questions in plain English about a **synthetic healthcare claims dataset**. Under the hood, it translates your question into SQL, runs it, and then gives you back both the answer *and* the query it used.
+This project is a lightweight service that allows an internal analyst to ask questions in plain English about a **synthetic healthcare claims dataset** and receive clear, evidence-backed answers.
+Behind the scenes, the core flow is still **NL → SQL → DuckDB → explanation of results**, which works well for structured claims data. In addition, the system creates **healthcare-focused “document” representations** for each claim and runs a simple **retrieval and chunking process** to support **source-style citations**.
+It also includes a few practical safeguards—if the supporting data is weak, or if a question starts to drift into clinical advice, the system flags that and responds more cautiously instead of overcommitting.
 
 It’s meant more as a **grounded Q&A demo** than a production system.
 
@@ -46,13 +48,16 @@ One small gotcha: run everything from the repo root, otherwise `.env` might not 
 
 Very roughly:
 
-1. Load the CSV into memory
-2. Ask the LLM to generate SQL
-3. Sanity-check that SQL
-4. Run it in DuckDB
-5. Ask the LLM again to explain the result
 
-That’s it.
+**Ground truth for numbers** still comes from SQL results. Retrieval is there for **traceability and reviewer UX**, not as a substitute for aggregates on tabular claims.
+1. Load the CSV into memory and register it as a `claims` table in DuckDB
+2. Create a parallel `healthcare_docs` table—basically one synthetic “document” per claim, with metadata to support retrieval
+3. Break those documents into chunks using sentence-aware logic so they feel closer to policy or section-style snippets
+4. When a question comes in, pull back a handful of the most relevant chunks (mainly for debugging and **citations** in the API response)
+5. Have the LLM generate SQL, but only against the `claims` table
+6. Do a quick sanity check, then run that SQL in DuckDB
+7. Call the LLM again to explain the **actual query results**—making sure the explanation reflects the returned rows, not just the schema
+8. Add **safety guardrails**—for example, escalate if the wording looks high-risk, or return an “insufficient evidence” message if the grounding isn’t strong
 
 ---
 
@@ -81,6 +86,8 @@ That’s it.
 * Then a second LLM call takes a **preview of actual query output** and turns it into a readable answer
   → this helps avoid hallucinating based only on schema
 
+* Citations are built from the **top retrieved chunks** (`chunk_id`, `document_id`, `payer`, `effective_date`) so reviewers can see what narrative context was surfaced alongside the SQL path
+
 ---
 
 ## API layer
@@ -101,10 +108,11 @@ Example request:
 
 Response includes:
 
-* answer
-* sql
-* row_count
-* truncated flag
+* `answer` — a plain-English explanation, finalized after applying safety checks
+* `sql` — the validated `SELECT` or `WITH` query that runs against the `claims` table
+* `row_count` — the number of rows returned, after applying the internal cap
+* `truncated` — indicates whether that row limit was reached
+* `citations` — a short list of source snippets pulled from the top-ranked retrieval chunks (used for context and traceability, not as the source of numeric truth)
 
 Docs:
 
@@ -116,17 +124,14 @@ If you hit `/` and get `"Not Found"`, it’s almost always because uvicorn wasn�
 
 ---
 
-## Why SQL instead of RAG?
+## Design: SQL, RAG-style retrieval, and hybrid tradeoffs
 
-Short answer: this is structured data.
+**SQL** is really the backbone here. The data is relational, and most analyst questions boil down to filters and aggregates anyway, so SQL gives you consistent, reproducible numbers and makes testing much more straightforward.
 
-Longer answer:
+Layering in **retrieval and chunking** over the derived claim “documents” adds a more healthcare-friendly context. You get useful metadata—like payer or effective date—along with ranked snippets and **citations** in the API response. That said, it’s not meant to replace SQL when it comes to computing totals or averages in this setup.
 
-* Most questions here are aggregations or filters
-* Vector search over row text would be awkward and hard to verify
-* SQL is deterministic → easier to test
+If the scope included external materials, like policy PDFs, then a **pure vector-based RAG** approach would make more sense. But since we’re only working with `synthetic_claims.csv`, using lightweight lexical retrieval over generated snippets is a practical, intentional middle ground.
 
-So yeah… SQL just made more sense here.
 
 ---
 
@@ -186,28 +191,28 @@ Notes:
 
 ## What the tests cover
 
-* data loading + schema sanity
+* data loading + schema sanity (including `healthcare_docs` registration)
 * SQL validation logic
 * API behavior
+* chunking + retrieval ranking and filters
+* small **eval harness** (`eval.summarize_retrieval`) for retrieval-focused checks
 * “golden” queries (predefined SQL → expected outputs)
 
-The golden tests are useful because they don’t depend on the LLM at all.
+The golden and retrieval tests are useful because they don’t depend on the LLM.
 
 ---
 
 ## Evaluation approach
 
-There’s a `tests/golden.yaml` file with known queries and expected results.
 
-So instead of asking:
+1. **Golden SQL suite** — In `tests/golden.yaml`, we run a set of canonical `SELECT` queries against the same CSV the application uses, and assert on key values like counts, sums, and averages. This serves as the **source of truth** for aggregate correctness.
 
-> “did the model explain it well?”
+2. **Retrieval evaluation** — In `tests/test_eval.py`, we validate retrieval behavior using `claims_nl_qa.eval.summarize_retrieval`, along with metadata-based filtering. The goal is to keep improvements to chunking and ranking under control, without needing to call OpenAI during tests.
 
-we check:
+3. **Smoke tests (optional)** — When `RUN_OPENAI_SMOKE=1` is set and a valid API key is available, a small set of tests runs end-to-end against the real API to confirm everything is wired up correctly.
 
-> “did the system produce the correct numbers?”
+It’s naturally harder to evaluate LLM-generated explanations in an automated way. To reduce that risk, the system grounds responses in the **actual query results**, and always returns the **`sql` along with deterministic checks**, so the numbers can be verified independently.
 
-Different problem, but much more stable.
 
 ---
 
@@ -218,7 +223,9 @@ This is still a demo, so a few obvious gaps:
 * LLM can still generate incorrect SQL (guardrails reduce risk but cannot guarantee perfect SQL)
 * No full production security model (no auth, no rate limiting, etc.)
 * In-memory DB + single connection → not scalable
-* Golden tests don’t evaluate answer quality, only correctness of results
+* The golden tests don’t try to evaluate how the final `answer` is phrased—they focus strictly on whether the **underlying SQL results** match the expected fixtures when run directly
+* The citations come from retrieved snippets that are **derived from the claims data itself**, not from external clinical policies or independent sources
+* The retrieval layer is intentionally simple and lexical-based; we chose to skip embeddings and rerankers in favor of keeping the system lightweight, with no additional infrastructure and fully offline testability
 * Dataset is synthetic → real-world messiness isn’t represented
 
 So yeah… not production-ready, especially not for anything involving real PHI.
@@ -231,7 +238,9 @@ So yeah… not production-ready, especially not for anything involving real PHI.
 src/claims_nl_qa/
   config.py
   data.py
+  eval.py
   qa.py
+  retrieval.py
   main.py
 
 docs/

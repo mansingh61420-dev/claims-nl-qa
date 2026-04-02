@@ -11,7 +11,8 @@ import duckdb
 from openai import OpenAI
 
 from claims_nl_qa.config import Settings
-from claims_nl_qa.data import CLAIMS_TABLE, schema_description
+from claims_nl_qa.data import CLAIMS_TABLE, HEALTHCARE_DOCS_TABLE, schema_description
+from claims_nl_qa.retrieval import chunk_healthcare_documents, retrieve_relevant_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,22 @@ logger = logging.getLogger(__name__)
 _DEFAULT_MAX_RESULT_ROWS = 500
 _OPENAI_TIMEOUT_SECONDS = 30
 _DUCKDB_QUERY_TIMEOUT_SECONDS = 30.0
+_HIGH_RISK_TERMS = (
+    "treatment",
+    "medication",
+    "prescription",
+    "clinical recommendation",
+    "diagnose",
+    "diagnosis recommendation",
+)
+_ESCALATION_MESSAGE = (
+    "I cannot provide clinical or coverage recommendations from limited context. "
+    "Please escalate this question to a licensed clinician or policy reviewer."
+)
+_INSUFFICIENT_EVIDENCE_MESSAGE = (
+    "I do not have enough grounded evidence in retrieved sources to answer confidently. "
+    "Please refine the question or provide additional policy context."
+)
 
 # If any of these show up, we bail—user only gets SELECTs.
 _BANNED_STATEMENT = re.compile(
@@ -41,6 +58,7 @@ class QAResult:
     sql: str
     row_count: int
     truncated: bool
+    citations: list[str]
 
 
 def _client(settings: Settings) -> OpenAI:
@@ -215,6 +233,47 @@ def _answer_from_results(
     return text
 
 
+def _citations_from_chunks(top_chunks: Any) -> list[str]:
+    """Create lightweight source citations from retrieved chunk rows."""
+    if top_chunks is None or getattr(top_chunks, "empty", True):
+        return []
+    cols = {"chunk_id", "document_id", "payer", "effective_date"}
+    available = [c for c in cols if c in top_chunks.columns]
+    rows = top_chunks[available].to_dict(orient="records")
+    citations: list[str] = []
+    for row in rows:
+        chunk_id = row.get("chunk_id", "unknown_chunk")
+        document_id = row.get("document_id", "unknown_doc")
+        payer = row.get("payer", "unknown_payer")
+        eff = row.get("effective_date", "unknown_date")
+        citations.append(f"{chunk_id} (doc={document_id}, payer={payer}, effective_date={eff})")
+    return citations
+
+
+def _apply_safety_guardrails(
+    question: str,
+    answer: str,
+    *,
+    citations: list[str],
+    row_count: int,
+) -> str:
+    """Prevent unsupported assertions and force safe fallback when evidence is weak."""
+    q_lower = question.lower()
+    a_lower = answer.lower()
+
+    if any(term in q_lower for term in _HIGH_RISK_TERMS):
+        return _ESCALATION_MESSAGE
+
+    if row_count == 0 or not citations:
+        return _INSUFFICIENT_EVIDENCE_MESSAGE
+
+    risky_answer_patterns = ("you should", "must", "recommend", "definitely")
+    if any(pat in a_lower for pat in risky_answer_patterns):
+        return _ESCALATION_MESSAGE
+
+    return answer
+
+
 def ask_question(
     con: duckdb.DuckDBPyConnection,
     settings: Settings,
@@ -230,6 +289,20 @@ def ask_question(
     if not q:
         raise QAError("Question is empty.")
 
+    # Retrieval trace is diagnostic only for now; SQL pipeline remains source of truth.
+    top_chunks = None
+    try:
+        docs_df = con.execute(f"SELECT * FROM {HEALTHCARE_DOCS_TABLE}").fetchdf()
+        chunks_df = chunk_healthcare_documents(docs_df)
+        top_chunks = retrieve_relevant_chunks(chunks_df, q, top_k=3)
+        if not top_chunks.empty:
+            logger.debug(
+                "Retrieval trace top chunks: %s",
+                top_chunks[["chunk_id", "retrieval_score", "payer"]].to_dict(orient="records"),
+            )
+    except Exception:
+        logger.exception("Retrieval trace skipped due to retrieval pipeline error")
+
     schema_text = schema_description(con)
     sql = _generate_sql(q, schema_text, settings)
     sql = validate_sql(sql)
@@ -237,10 +310,18 @@ def ask_question(
     columns, rows, truncated = execute_readonly_sql(con, sql, max_rows=max_result_rows)
     preview = _preview_rows(columns, rows)
     answer = _answer_from_results(q, sql, preview, settings)
+    citations = _citations_from_chunks(top_chunks)
+    safe_answer = _apply_safety_guardrails(
+        q,
+        answer,
+        citations=citations,
+        row_count=len(rows),
+    )
 
     return QAResult(
-        answer=answer,
+        answer=safe_answer,
         sql=sql,
         row_count=len(rows),
         truncated=truncated,
+        citations=citations,
     )

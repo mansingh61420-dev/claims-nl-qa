@@ -78,5 +78,6 @@ def test_ask_happy_path_smoke():
     assert r.status_code == 200
     data = r.json()
     assert "answer" in data and "sql" in data
+    assert "citations" in data and isinstance(data["citations"], list)
     assert data["row_count"] >= 1
     assert "SELECT" in data["sql"].upper()
