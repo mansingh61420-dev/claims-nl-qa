@@ -1,7 +1,15 @@
 from pathlib import Path
 
 from claims_nl_qa.config import Settings
-from claims_nl_qa.data import CLAIMS_TABLE, connect_with_claims, load_claims_frame, schema_description
+from claims_nl_qa.data import (
+    CLAIMS_TABLE,
+    HEALTHCARE_DOCS_TABLE,
+    build_healthcare_documents,
+    connect_with_claims,
+    load_claims_frame,
+    schema_description,
+    validate_healthcare_metadata,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_CSV = _REPO_ROOT / "docs" / "synthetic_claims.csv"
@@ -46,6 +54,21 @@ def test_duckdb_register_and_schema():
         desc = schema_description(con)
         assert "claim_id" in desc
         assert "service_date" in desc
+    finally:
+        con.close()
+
+
+def test_healthcare_documents_metadata_and_registration():
+    """Derived healthcare docs validate and register into DuckDB."""
+    df = load_claims_frame(_DEFAULT_CSV)
+    docs_df = build_healthcare_documents(df)
+    validate_healthcare_metadata(docs_df)
+
+    settings = Settings(data_path=_DEFAULT_CSV)
+    con, _ = connect_with_claims(settings)
+    try:
+        count = con.execute(f"SELECT COUNT(*) FROM {HEALTHCARE_DOCS_TABLE}").fetchone()[0]
+        assert count == 60
     finally:
         con.close()
 
