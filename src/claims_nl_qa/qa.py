@@ -11,7 +11,8 @@ import duckdb
 from openai import OpenAI
 
 from claims_nl_qa.config import Settings
-from claims_nl_qa.data import CLAIMS_TABLE, schema_description
+from claims_nl_qa.data import CLAIMS_TABLE, HEALTHCARE_DOCS_TABLE, schema_description
+from claims_nl_qa.retrieval import chunk_healthcare_documents, retrieve_relevant_chunks
 
 logger = logging.getLogger(__name__)
 
@@ -229,6 +230,19 @@ def ask_question(
     q = question.strip()
     if not q:
         raise QAError("Question is empty.")
+
+    # Retrieval trace is diagnostic only for now; SQL pipeline remains source of truth.
+    try:
+        docs_df = con.execute(f"SELECT * FROM {HEALTHCARE_DOCS_TABLE}").fetchdf()
+        chunks_df = chunk_healthcare_documents(docs_df)
+        top_chunks = retrieve_relevant_chunks(chunks_df, q, top_k=3)
+        if not top_chunks.empty:
+            logger.debug(
+                "Retrieval trace top chunks: %s",
+                top_chunks[["chunk_id", "retrieval_score", "payer"]].to_dict(orient="records"),
+            )
+    except Exception:
+        logger.exception("Retrieval trace skipped due to retrieval pipeline error")
 
     schema_text = schema_description(con)
     sql = _generate_sql(q, schema_text, settings)

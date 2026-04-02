@@ -5,6 +5,8 @@ from typing import Any
 
 import pandas as pd
 
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
 
 def _split_sentences(text: str) -> list[str]:
     """Split content into sentence-like pieces for policy-style chunk assembly."""
@@ -68,3 +70,42 @@ def chunk_healthcare_documents(
             )
 
     return pd.DataFrame(rows)
+
+
+def _tokenize(text: str) -> set[str]:
+    return set(_TOKEN_RE.findall(text.lower()))
+
+
+def _score_chunk(question: str, chunk_text: str) -> int:
+    """Deterministic lexical overlap score for stable ranking."""
+    q_tokens = _tokenize(question)
+    c_tokens = _tokenize(chunk_text)
+    return len(q_tokens & c_tokens)
+
+
+def retrieve_relevant_chunks(
+    chunks_df: pd.DataFrame,
+    question: str,
+    *,
+    top_k: int = 5,
+    metadata_filters: dict[str, Any] | None = None,
+) -> pd.DataFrame:
+    """Apply metadata filters and stable top-k ranking for retrieval."""
+    filtered = chunks_df.copy()
+    metadata_filters = metadata_filters or {}
+
+    for key, value in metadata_filters.items():
+        if key not in filtered.columns or value is None:
+            continue
+        filtered = filtered[filtered[key] == value]
+
+    if filtered.empty:
+        return filtered
+
+    out = filtered.copy()
+    out["retrieval_score"] = out["chunk_text"].map(lambda text: _score_chunk(question, str(text)))
+    out = out.sort_values(
+        by=["retrieval_score", "document_id", "chunk_index"],
+        ascending=[False, True, True],
+    )
+    return out.head(max(top_k, 0)).reset_index(drop=True)
